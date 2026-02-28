@@ -2,7 +2,7 @@
     "company_name": "FusionHex",
     "website_url": "https://www.fusionhex.com/",
     "app_title": "TimeMachine",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "about_text": "Instant local snapshots and backups directly from your Windows context menu. Keep your projects safe before making risky changes.",
     "colors": {
         "bg": "#1a1a1a",

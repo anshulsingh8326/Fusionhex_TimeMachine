@@ -29,7 +29,7 @@ def load_config():
             pass
     return {
         "company_name": "FusionHex", "website_url": "https://www.fusionhex.com/",
-        "app_title": "TimeMachine", "version": "1.0.6",
+        "app_title": "TimeMachine", "version": "1.0.7",
         "about_text": "Instant local snapshots directly from your Windows context menu.",
         "colors": {"bg": "#1a1a1a", "fg": "#ffffff", "primary": "#0078D7", "accent": "#ff9800", "danger": "#d32f2f"}
     }
@@ -101,13 +101,13 @@ def should_ignore(rel_path, patterns):
     return False
 
 def create_timeignore(target_dir, silent=False):
-    """Generates a demo .timeignore file. If silent is True, no popups are shown."""
     ignore_path = os.path.join(target_dir, ".timeignore")
     if not os.path.exists(ignore_path):
         content = """# FusionHex TimeMachine Ignore File
 # Add folder or file names below to exclude them from snapshots.
 # Syntax supports basic wildcards (similar to .gitignore).
-# Remove '#' before a line to activate it or else it will be treated as a comment.
+# Lines starting with '#' are comments and ignored. Remove the '#' to exclude folders/files. 
+# 
 #
 # Examples:
 # node_modules/
@@ -115,6 +115,12 @@ def create_timeignore(target_dir, silent=False):
 # build/
 # *.mp4
 # *.exe
+
+venv/
+build/
+__pycache__/
+*.spec
+.git/
 """
         with open(ignore_path, "w") as f:
             f.write(content)
@@ -160,7 +166,6 @@ def get_next_snapshot_index(target_dir):
     return max(indices) + 1 if indices else 1
 
 def create_snapshot_thread(target_dir, is_fav):
-    # Auto-generate the demo .timeignore silently before doing anything
     create_timeignore(target_dir, silent=True)
 
     tm_path = os.path.join(target_dir, TM_DIR)
@@ -169,7 +174,6 @@ def create_snapshot_thread(target_dir, is_fav):
         hide_folder(tm_path)
 
     patterns = get_ignore_patterns(target_dir)
-
     index = get_next_snapshot_index(target_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     fav_suffix = "_FAV" if is_fav else ""
@@ -207,9 +211,11 @@ def create_snapshot_thread(target_dir, is_fav):
         prog_win.update(100)
         prog_win.close()
         messagebox.showinfo("TimeMachine", f"Snapshot Created: {snapshot_name}\nFiles Saved: {total_files}")
+        os._exit(0) # INSTANTLY KILL GHOST PROCESS
     except Exception as e:
         prog_win.close()
         messagebox.showerror("Error", f"Failed: {e}")
+        os._exit(1) # KILL ON ERROR
 
 def restore_snapshot_thread(target_dir, snapshot_name):
     prog_win = ProgressWindow("Restoring Snapshot", f"Restoring from {snapshot_name}...")
@@ -234,20 +240,22 @@ def restore_snapshot_thread(target_dir, snapshot_name):
 
         prog_win.close()
         messagebox.showinfo("Success", "Folder Restored perfectly!")
+        os._exit(0) # INSTANTLY KILL GHOST PROCESS
     except Exception as e:
         prog_win.close()
         messagebox.showerror("Error", f"Restore Error: {e}")
+        os._exit(1) # KILL ON ERROR
 
 def initiate_restore(target_dir):
     tm_path = os.path.join(target_dir, TM_DIR)
     if not os.path.isdir(tm_path):
         messagebox.showerror("Error", "No .TimeMachine folder found here.")
-        return
+        os._exit(0)
 
     snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
     if not snapshots:
         messagebox.showwarning("Empty", "No snapshots found.")
-        return
+        os._exit(0)
 
     snapshots.sort(key=lambda x: int(x.split("_")[1]) if "_" in x else 0, reverse=True)
 
@@ -257,12 +265,17 @@ def initiate_restore(target_dir):
             top.destroy()
             if messagebox.askyesno("Confirm", "This will WIPE current files and restore. Proceed?"):
                 threading.Thread(target=restore_snapshot_thread, args=(target_dir, choice), daemon=True).start()
+            else:
+                os._exit(0) # KILL IF USER CANCELS
 
     top = tk.Toplevel()
     top.title(f"{CONFIG['company_name']} Restore")
     center_window(top, 380, 420)
     top.configure(bg=COLORS["bg"])
     set_window_icon(top)
+    
+    # If user hits the 'X' to close the window, kill the process
+    top.protocol("WM_DELETE_WINDOW", lambda: os._exit(0))
     
     tk.Label(top, text="Select Snapshot to Restore", bg=COLORS["bg"], fg=COLORS["accent"], font=("Segoe UI", 12, "bold")).pack(pady=(15,5))
     listbox = tk.Listbox(top, bg="#2d2d2d", fg=COLORS["fg"], selectbackground=COLORS["primary"], relief="flat", font=("Consolas", 10))
@@ -298,16 +311,39 @@ class InstallerGUI:
 
     def run_threaded(self, func):
         threading.Thread(target=func, daemon=True).start()
+        
+    def get_permanent_exe(self):
+        """Copies the EXE and config.json to a permanent AppData folder."""
+        appdata_dir = os.path.join(os.getenv('LOCALAPPDATA'), 'FusionHex_TimeMachine')
+        if not os.path.exists(appdata_dir):
+            os.makedirs(appdata_dir)
+            
+        perm_exe = os.path.join(appdata_dir, "TimeMachine.exe")
+        perm_config = os.path.join(appdata_dir, "config.json")
+        
+        # Don't copy if we are already running from AppData
+        if self.exe_path.lower() != perm_exe.lower():
+            try: 
+                # Copy the EXE
+                shutil.copy2(self.exe_path, perm_exe)
+                
+                # Copy the config.json file alongside it!
+                local_config = os.path.join(get_base_path(), "config.json")
+                if os.path.exists(local_config):
+                    shutil.copy2(local_config, perm_config)
+            except Exception: pass
+                
+        return perm_exe if os.path.exists(perm_exe) else self.exe_path
 
     def get_reg_content(self):
-        safe_exe = self.exe_path.replace("\\", "\\\\")
+        # We now map the registry to the cloned AppData EXE!
+        safe_exe = self.get_permanent_exe().replace("\\", "\\\\")
         
         icon_main = get_permanent_icon("app_icon.ico").replace("\\", "\\\\")
         icon_create = get_permanent_icon("create.ico").replace("\\", "\\\\")
         icon_fav = get_permanent_icon("fav.ico").replace("\\", "\\\\")
         icon_restore = get_permanent_icon("restore.ico").replace("\\", "\\\\")
 
-        # Removed 04ignore, moved CommandFlags to 03restore to act as the visual divider
         return f"""Windows Registry Editor Version 5.00
 
 ; --- BACKGROUND MENU ---
@@ -372,7 +408,7 @@ class InstallerGUI:
         prog.update(100)
         time.sleep(0.5)
         prog.close()
-        messagebox.showinfo("Success", "Context Menu Installed Natively!")
+        messagebox.showinfo("Success", "Context Menu Installed! You can safely move or delete this setup file.")
 
     def uninstall_reg(self):
         prog = ProgressWindow("Removing", "Scrubbing Registry Keys...")
@@ -396,7 +432,6 @@ class InstallerGUI:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    # Removed "ignore" from choices
     parser.add_argument("command", nargs='?', choices=["create", "restore"])
     parser.add_argument("path", nargs='?')
     parser.add_argument("--fav", action="store_true")

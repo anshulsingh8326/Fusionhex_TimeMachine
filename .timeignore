@@ -8,3 +8,9 @@
 # build/
 # *.mp4
 # *.exe
+
+venv/
+build/
+__pycache__/
+*.spec
+.git/
