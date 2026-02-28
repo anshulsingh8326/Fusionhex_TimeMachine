@@ -1,0 +1,10 @@
+# FusionHex TimeMachine Ignore File
+# Add folder or file names below to exclude them from snapshots.
+# Syntax supports basic wildcards (similar to .gitignore).
+#
+# Examples:
+# node_modules/
+# Library/
+# build/
+# *.mp4
+# *.exe
