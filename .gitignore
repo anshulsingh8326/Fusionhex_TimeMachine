@@ -1,0 +1,5 @@
+# Ignore unnecessary files and folders
+dist/
+build/
+__pycache__/
+venv/
