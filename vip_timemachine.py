@@ -26,7 +26,7 @@ def get_base_path():
     return os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
 
 def load_config():
-    config_path = os.path.join(get_base_path(), "config.json")
+    config_path = os.path.join(get_base_path(), "config_vip.json")
     if os.path.exists(config_path):
         try:
             with open(config_path, "r") as f: return json.load(f)
@@ -75,7 +75,6 @@ def center_window(window, width, height):
 
 # --- AI & CLI JSON ENGINE ---
 def out_json(status, action, data=None, error=None):
-    """Outputs pure JSON to stdout for AI Agents to read, then exits cleanly."""
     out = {"status": status, "action": action}
     if data: out["data"] = data
     if error: out["error"] = error
@@ -175,7 +174,7 @@ def get_next_index(target_dir, prefix):
     indices = [int(f.split("_")[1]) for f in os.listdir(tm_path) if f.startswith(prefix) and f.endswith(".zip") and "_" in f]
     return max(indices) + 1 if indices else 1
 
-def perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui):
+def perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui, is_fav):
     tm_path = os.path.join(target_dir, TM_DIR)
     if not os.path.exists(tm_path): 
         os.makedirs(tm_path)
@@ -184,7 +183,8 @@ def perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui):
     index = get_next_index(target_dir, prefix)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name_suffix = f"_{custom_name.replace(' ', '_')}" if custom_name else ""
-    snapshot_name = f"{prefix}_{index}_{timestamp}{name_suffix}.zip"
+    fav_suffix = "_FAV" if is_fav else ""
+    snapshot_name = f"{prefix}_{index}_{timestamp}{name_suffix}{fav_suffix}.zip"
     snapshot_path = os.path.join(tm_path, snapshot_name)
 
     total_files = len(all_files)
@@ -194,8 +194,8 @@ def perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui):
         with zipfile.ZipFile(snapshot_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             if total_files > 0:
                 for i, file_path in enumerate(all_files):
-                    if os.path.isfile(file_path):
-                        zipf.write(file_path, os.path.relpath(file_path, target_dir))
+                    # FIX: Removed isfile() check so empty directories are correctly written to the zip!
+                    zipf.write(file_path, os.path.relpath(file_path, target_dir))
                     if use_gui and i % max(1, total_files // 100) == 0: 
                         prog_win.update((i / total_files) * 100)
         
@@ -217,37 +217,40 @@ def cli_list(target_dir, json_mode):
     
     data = []
     for s in snapshots:
+        parts = s.split("_")
+        snap_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else "?"
         size_mb = round(os.path.getsize(os.path.join(tm_path, s)) / (1024*1024), 2)
-        data.append({"filename": s, "size_mb": size_mb})
+        data.append({"id": snap_id, "filename": s, "size_mb": size_mb})
 
     if json_mode:
         out_json("success", "list", {"snapshots": data, "total": len(data)})
     else:
         print("\n=== FusionHex TimeMachine Snapshots ===")
-        for d in data: print(f" - {d['filename']} ({d['size_mb']} MB)")
+        for d in data: print(f" [{d['id']}] {d['filename']} ({d['size_mb']} MB)")
         print("=======================================\n")
+        print("Tip: Restore instantly using the ID (e.g., 'tm restore 2')\n")
 
-def execute_snapshot(target_dir, custom_name="", prefix="Snapshot", json_mode=False, use_gui=True):
+def execute_snapshot(target_dir, custom_name="", prefix="Snapshot", json_mode=False, use_gui=True, is_fav=False, force=False):
     create_timeignore(target_dir, silent=True)
     all_files = get_files_to_zip(target_dir)
 
-    if is_duplicate_snapshot(target_dir, all_files, prefix):
+    if not force and is_duplicate_snapshot(target_dir, all_files, prefix):
         if json_mode:
             out_json("error", "snapshot_creation", error="Identical snapshot already exists.")
         elif use_gui:
             if not messagebox.askyesno("Duplicate Found", f"A {prefix} with identical files already exists. Create anyway?"): os._exit(0)
         else:
-            print("Identical snapshot exists. Use GUI or rename to bypass.")
+            print("Identical snapshot exists. Use -f or --force to bypass.")
             os._exit(0)
 
     try:
-        snapshot_name, total_files = perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui)
+        snapshot_name, total_files = perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui, is_fav)
         if json_mode:
             out_json("success", "snapshot_created", {"filename": snapshot_name, "files_saved": total_files})
         elif use_gui and prefix != "Backup":
             messagebox.showinfo("TimeMachine", f"{prefix} Created: {snapshot_name}\nFiles Saved: {total_files}")
         elif not use_gui:
-            print(f"Success! Created {snapshot_name} ({total_files} files)")
+            print(f"Success! Created {snapshot_name} ({total_files} items)")
         
         if prefix != "Backup": os._exit(0)
     except Exception as e:
@@ -258,13 +261,30 @@ def execute_snapshot(target_dir, custom_name="", prefix="Snapshot", json_mode=Fa
 
 def execute_restore(target_dir, target_snap, json_mode=False, use_gui=True, make_backup=True):
     tm_path = os.path.join(target_dir, TM_DIR)
+    
+    if target_snap.isdigit():
+        if not os.path.exists(tm_path):
+            if json_mode: out_json("error", "restore", error="No snapshots found.")
+            else: print("Error: No .TimeMachine folder found.")
+            os._exit(1)
+            
+        snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
+        matches = [f for f in snapshots if len(f.split("_")) > 1 and f.split("_")[1] == target_snap]
+        if matches:
+            target_snap = sorted(matches)[-1] 
+        else:
+            if json_mode: out_json("error", "restore", error=f"Snapshot ID '{target_snap}' not found.")
+            elif use_gui: messagebox.showerror("Error", f"Snapshot ID '{target_snap}' not found.")
+            else: print(f"Error: Snapshot ID '{target_snap}' not found.")
+            os._exit(1)
+
     if not os.path.exists(os.path.join(tm_path, target_snap)):
         if json_mode: out_json("error", "restore", error=f"Snapshot '{target_snap}' not found.")
         elif use_gui: messagebox.showerror("Error", "Snapshot not found.")
         else: print(f"Error: Snapshot '{target_snap}' not found.")
         os._exit(1)
 
-    if make_backup: execute_snapshot(target_dir, prefix="Backup", json_mode=False, use_gui=use_gui)
+    if make_backup: execute_snapshot(target_dir, prefix="Backup", json_mode=False, use_gui=use_gui, is_fav=False, force=True)
 
     prog_win = ProgressWindow("Restoring", f"Restoring {target_snap}...") if use_gui else None
     try:
@@ -314,7 +334,6 @@ class InstallerGUI:
         tk.Button(btn_frame, text="Remove Menu", font=("Segoe UI", 10, "bold"), bg=COLORS["danger"], fg="white", relief="flat", width=35, pady=8, command=lambda: threading.Thread(target=self.uninstall_reg, daemon=True).start()).pack(pady=5)
 
     def add_to_path(self, appdata_dir):
-        """Injects the AppData folder into the Windows Environment PATH so 'tm' works everywhere."""
         import winreg
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_ALL_ACCESS)
@@ -334,14 +353,14 @@ class InstallerGUI:
         if not os.path.exists(appdata_dir): os.makedirs(appdata_dir)
             
         perm_exe = os.path.join(appdata_dir, "tm.exe")
-        perm_config = os.path.join(appdata_dir, "config.json")
+        perm_config = os.path.join(appdata_dir, "config_vip.json")
         
-        self.add_to_path(appdata_dir) # Inject to System PATH
+        self.add_to_path(appdata_dir) 
         
         if self.exe_path.lower() != perm_exe.lower():
             try: 
                 shutil.copy2(self.exe_path, perm_exe)
-                local_config = os.path.join(get_base_path(), "config.json")
+                local_config = os.path.join(get_base_path(), "config_vip.json")
                 if os.path.exists(local_config): shutil.copy2(local_config, perm_config)
             except Exception: pass
         return perm_exe if os.path.exists(perm_exe) else self.exe_path
@@ -351,6 +370,7 @@ class InstallerGUI:
         safe_exe = self.get_permanent_exe().replace("\\", "\\\\")
         icon_main = get_permanent_icon("app_icon.ico").replace("\\", "\\\\")
         icon_create = get_permanent_icon("create.ico").replace("\\", "\\\\")
+        icon_fav = get_permanent_icon("fav.ico").replace("\\", "\\\\")
         icon_restore = get_permanent_icon("restore.ico").replace("\\", "\\\\")
 
         reg_content = f"""Windows Registry Editor Version 5.00
@@ -365,12 +385,42 @@ class InstallerGUI:
 [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\01create\\command]
 @="\\"{safe_exe}\\" _ctx_create \\"%V\\""
 
-[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\02restore]
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\02fav]
+@="Create Favorite Snapshot"
+"Icon"="\\"{icon_fav}\\""
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\02fav\\command]
+@="\\"{safe_exe}\\" _ctx_create \\"%V\\" --fav"
+
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\03restore]
 @="Restore from Snapshot..."
 "CommandFlags"=dword:00000020
 "Icon"="\\"{icon_restore}\\""
-[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\02restore\\command]
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine\\shell\\03restore\\command]
 @="\\"{safe_exe}\\" _ctx_restore \\"%V\\""
+
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine]
+"MUIVerb"="{CONFIG['app_title']}"
+"SubCommands"=""
+"Icon"="\\"{icon_main}\\""
+
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\01create]
+@="Create Snapshot"
+"Icon"="\\"{icon_create}\\""
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\01create\\command]
+@="\\"{safe_exe}\\" _ctx_create \\"%1\\""
+
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\02fav]
+@="Create Favorite Snapshot"
+"Icon"="\\"{icon_fav}\\""
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\02fav\\command]
+@="\\"{safe_exe}\\" _ctx_create \\"%1\\" --fav"
+
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\03restore]
+@="Restore from Snapshot..."
+"CommandFlags"=dword:00000020
+"Icon"="\\"{icon_restore}\\""
+[HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\03restore\\command]
+@="\\"{safe_exe}\\" _ctx_restore \\"%1\\""
 """
         reg_file = os.path.abspath("install_tm.reg")
         with open(reg_file, "w") as f: f.write(reg_content)
@@ -378,12 +428,12 @@ class InstallerGUI:
         subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(reg_file): os.remove(reg_file)
         prog.update(100); time.sleep(0.5); prog.close()
-        messagebox.showinfo("Success", "Context Menu & CLI Installed!\n\nYou can now type 'tm snapshot' in any terminal.")
+        messagebox.showinfo("Success", "Context Menu & CLI Installed!\n\nYou can now type 'tm commands' in any terminal.")
 
     def uninstall_reg(self):
         prog = ProgressWindow("Removing", "Scrubbing Registry Keys...")
         reg_file = os.path.abspath("uninstall_tm.reg")
-        with open(reg_file, "w") as f: f.write("Windows Registry Editor Version 5.00\n[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine]\n")
+        with open(reg_file, "w") as f: f.write("Windows Registry Editor Version 5.00\n[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine]\n[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine]\n")
         import time; time.sleep(1); prog.update(50)
         subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(reg_file): os.remove(reg_file)
@@ -398,12 +448,16 @@ if __name__ == "__main__":
     # Internal Context Menu Commands
     p_ctx_create = subparsers.add_parser("_ctx_create")
     p_ctx_create.add_argument("path")
+    p_ctx_create.add_argument("--fav", action="store_true")
+    
     p_ctx_restore = subparsers.add_parser("_ctx_restore")
     p_ctx_restore.add_argument("path")
 
     # Public CLI Commands
     p_snap = subparsers.add_parser("snapshot", help="Create a snapshot")
     p_snap.add_argument("name", nargs="?", default="", help="Optional name suffix")
+    p_snap.add_argument("--fav", action="store_true", help="Mark as favorite")
+    p_snap.add_argument("-f", "--force", action="store_true", help="Force create even if identical")
     p_snap.add_argument("--json", action="store_true", help="Output pure JSON")
 
     p_list = subparsers.add_parser("list", help="List snapshots")
@@ -414,8 +468,12 @@ if __name__ == "__main__":
     p_ignore.add_argument("--json", action="store_true", help="Output pure JSON")
 
     p_restore = subparsers.add_parser("restore", help="Restore a snapshot")
-    p_restore.add_argument("id_or_name", help="Exact filename of the snapshot to restore")
+    p_restore.add_argument("id_or_name", help="Exact filename or ID of the snapshot to restore")
     p_restore.add_argument("--json", action="store_true", help="Output pure JSON")
+    
+    # New Commands Menu
+    p_cmds = subparsers.add_parser("commands", help="Show all available CLI commands")
+    p_help = subparsers.add_parser("help", help="Show all available CLI commands")
 
     args = parser.parse_args()
 
@@ -427,18 +485,17 @@ if __name__ == "__main__":
 
     # Context Menu Mode (Hide Console, Show GUI)
     elif args.command in ["_ctx_create", "_ctx_restore"]:
-        hide_console() # Hide the flashing CMD box immediately
+        hide_console() 
         root = tk.Tk(); root.withdraw(); set_window_icon(root)
         target = args.path.strip('"') if args.path else os.getcwd()
         
         if args.command == "_ctx_create":
-            threading.Thread(target=execute_snapshot, args=(target, "", "Snapshot", False, True), daemon=True).start()
+            threading.Thread(target=execute_snapshot, args=(target, "", "Snapshot", False, True, args.fav, False), daemon=True).start()
             root.mainloop()
         elif args.command == "_ctx_restore":
             tm_path = os.path.join(target, TM_DIR)
             if not os.path.exists(tm_path): messagebox.showerror("Error", "No snapshots here."); os._exit(0)
             
-            # Simple GUI prompt for internal restore
             snapshots = sorted([f for f in os.listdir(tm_path) if f.endswith(".zip")], reverse=True)
             top = tk.Toplevel(); top.title("Restore"); center_window(top, 380, 420); top.configure(bg=COLORS["bg"]); set_window_icon(top)
             top.protocol("WM_DELETE_WINDOW", lambda: os._exit(0))
@@ -454,11 +511,20 @@ if __name__ == "__main__":
             tk.Button(top, text="RESTORE", bg=COLORS["danger"], fg=COLORS["fg"], command=on_sel).pack(pady=15, fill="x", padx=20)
             root.mainloop()
 
-    # CLI / AI Mode (Stay in terminal, optionally output JSON)
+    # CLI / AI Mode (Stay in terminal)
     else:
         cwd = os.getcwd()
-        if args.command == "snapshot":
-            execute_snapshot(cwd, custom_name=args.name, json_mode=args.json, use_gui=False)
+        if args.command in ["commands", "help"]:
+            print("\n=== FusionHex TimeMachine CLI Commands ===")
+            print(" tm snapshot [name]  : Create snapshot (Options: -f to force, --fav for favorite, --json)")
+            print(" tm restore <ID>     : Restore a snapshot by its ID or filename")
+            print(" tm list             : List all snapshots and their IDs")
+            print(" tm ignore <pattern> : Add a file/folder to .timeignore (e.g. tm ignore node_modules/)")
+            print(" tm commands         : Show this help menu")
+            print("==========================================\n")
+            os._exit(0)
+        elif args.command == "snapshot":
+            execute_snapshot(cwd, custom_name=args.name, json_mode=args.json, use_gui=False, is_fav=args.fav, force=args.force)
         elif args.command == "list":
             cli_list(cwd, json_mode=args.json)
         elif args.command == "ignore":

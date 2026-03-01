@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['_timemachine.py'],
+    ['vip_timemachine.py'],
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets')],
