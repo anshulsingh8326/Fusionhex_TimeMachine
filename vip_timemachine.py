@@ -6,18 +6,21 @@ import subprocess
 import ctypes
 import json
 import threading
-import webbrowser
 import fnmatch
 import argparse
+import stat
+import tempfile
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-# --- CONSOLE HIDER (For Context Menu) ---
+# --- CONSOLE HIDER ---
 def hide_console():
-    """Hides the terminal window instantly if launched from the Windows Context Menu."""
+    """Hides the terminal window instantly if launched as a GUI."""
     hwnd = ctypes.windll.kernel32.GetConsoleWindow()
     if hwnd: ctypes.windll.user32.ShowWindow(hwnd, 0)
+
+CREATE_NO_WINDOW = 0x08000000
 
 TM_DIR = ".TimeMachine"
 
@@ -32,10 +35,22 @@ def load_config():
             with open(config_path, "r") as f: return json.load(f)
         except Exception: pass
     return {
-        "company_name": "FusionHex", "website_url": "https://www.fusionhex.com/",
-        "app_title": "TimeMachine Premium", "version": "1.1.0",
-        "about_text": "Instant local snapshots directly from your Windows context menu & CLI.",
-        "colors": {"bg": "#1a1a1a", "fg": "#ffffff", "primary": "#0078D7", "accent": "#ff9800", "danger": "#d32f2f"}
+        "company_name": "FusionHex",
+        "website_url": "https://www.fusionhex.com/",
+        "app_title": "TimeMachine VIP",
+        "version": "1.2.5",
+        "about_text": "Instant local snapshots and backups directly from your Windows context menu. Keep your projects safe before making risky changes. CLI Supported.",
+        "colors": {
+            "bg": "#120e0c",
+            "fg": "#f5f5f5",
+            "primary": "#ff9800",
+            "secondary": "#0288D1",
+            "danger": "#d32f2f",
+            "card": "#1e1814",
+            "border": "#3a2e26",
+            "primary_hover": "#ffb74d",
+            "danger_hover": "#f44336"
+        }
     }
 
 CONFIG = load_config()
@@ -73,6 +88,76 @@ def center_window(window, width, height):
     y = int((window.winfo_screenheight() / 2) - (height / 2))
     window.geometry(f"{width}x{height}+{x}+{y}")
 
+def on_rm_error(func, path, exc_info):
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+# --- CUSTOM UI COMPONENTS ---
+def draw_rounded_rect(canvas, x, y, w, h, c, fill, tag="bg"):
+    canvas.delete(tag)
+    canvas.create_oval(x, y, x+c, y+c, fill=fill, outline="", tags=tag)
+    canvas.create_oval(x+w-c, y, x+w, y+c, fill=fill, outline="", tags=tag)
+    canvas.create_oval(x, y+h-c, x+c, y+h, fill=fill, outline="", tags=tag)
+    canvas.create_oval(x+w-c, y+h-c, x+w, y+h, fill=fill, outline="", tags=tag)
+    canvas.create_rectangle(x+c/2, y, x+w-c/2, y+h, fill=fill, outline="", tags=tag)
+    canvas.create_rectangle(x, y+c/2, x+w, y+h-c/2, fill=fill, outline="", tags=tag)
+
+class ActionButton(tk.Canvas):
+    def __init__(self, parent, width, height, text, bg, hover_bg, fg, command):
+        super().__init__(parent, width=width, height=height, bg=COLORS["bg"], highlightthickness=0)
+        self.command = command
+        self.bg_color, self.hover_bg = bg, hover_bg
+        
+        draw_rounded_rect(self, 0, 0, width, height, 16, bg, "bg")
+        self.txt_id = self.create_text(width//2, height//2, text=text, fill=fg, font=("Segoe UI", 11, "bold"), anchor="center")
+        
+        # Recolor instead of redraw so text stays on top
+        self.bind("<Enter>", lambda e: self.itemconfig("bg", fill=self.hover_bg))
+        self.bind("<Leave>", lambda e: self.itemconfig("bg", fill=self.bg_color))
+        
+        self.bind("<Button-1>", lambda e: self.command())
+        self.tag_bind(self.txt_id, "<Button-1>", lambda e: self.command())
+
+class AndroidToggle(tk.Canvas):
+    def __init__(self, parent, command=None, initial_state=True):
+        super().__init__(parent, width=50, height=28, bg=COLORS["bg"], highlightthickness=0)
+        self.state = initial_state
+        self.command = command
+        self.bind("<Button-1>", self.toggle)
+        self.update_visuals()
+        
+    def update_visuals(self):
+        self.delete("all")
+        bg_color = COLORS["primary"] if self.state else COLORS["border"]
+        draw_rounded_rect(self, 2, 4, 40, 20, 20, bg_color, "track")
+        thumb_x = 22 if self.state else 4
+        self.create_oval(thumb_x, 6, thumb_x+16, 22, fill=COLORS["bg"], outline="")
+        
+    def toggle(self, e):
+        self.state = not self.state
+        self.update_visuals()
+        if self.command: self.command(self.state)
+
+class SnapshotCard(tk.Canvas):
+    def __init__(self, parent, width, height, text, value, command):
+        super().__init__(parent, width=width, height=height, bg=COLORS["bg"], highlightthickness=0)
+        self.value, self.command, self.is_selected = value, command, False
+        self.width, self.height = width, height
+        
+        draw_rounded_rect(self, 2, 2, width-4, height-4, 12, COLORS["card"], "bg")
+        self.txt = self.create_text(15, height//2, text=text, fill=COLORS["fg"], font=("Segoe UI", 11), anchor="w")
+        
+        self.bind("<Enter>", lambda e: self.itemconfig("bg", fill=COLORS["border"]) if not self.is_selected else None)
+        self.bind("<Leave>", lambda e: self.itemconfig("bg", fill=COLORS["primary"] if self.is_selected else COLORS["card"]))
+        self.bind("<Button-1>", lambda e: self.command(self.value))
+        self.tag_bind(self.txt, "<Button-1>", lambda e: self.command(self.value))
+        
+    def set_selected(self, selected):
+        self.is_selected = selected
+        color, text_color = (COLORS["primary"], COLORS["bg"]) if selected else (COLORS["card"], COLORS["fg"])
+        self.itemconfig("bg", fill=color)
+        self.itemconfig(self.txt, fill=text_color)
+
 # --- AI & CLI JSON ENGINE ---
 def out_json(status, action, data=None, error=None):
     out = {"status": status, "action": action}
@@ -105,16 +190,7 @@ def should_ignore(rel_path, patterns):
 def create_timeignore(target_dir, silent=False):
     ignore_path = os.path.join(target_dir, ".timeignore")
     if not os.path.exists(ignore_path):
-        content = """# FusionHex TimeMachine Ignore File
-# node_modules/
-# build/
-# dist/
-# venv/
-# .git/
-# __pycache__/
-# *.mp4
-"""
-        with open(ignore_path, "w") as f: f.write(content)
+        with open(ignore_path, "w") as f: f.write("# FusionHex TimeMachine Ignore File\n# node_modules/\n# build/\n# dist/\n# venv/\n# .git/\n# __pycache__/\n# *.mp4\n")
 
 def get_files_to_zip(target_dir):
     patterns = get_ignore_patterns(target_dir)
@@ -152,20 +228,29 @@ class ProgressWindow:
     def __init__(self, title, message):
         self.top = tk.Toplevel()
         self.top.title(title)
-        center_window(self.top, 350, 120)
-        self.top.configure(bg=COLORS["bg"])
+        center_window(self.top, 380, 140)
+        self.top.configure(bg=COLORS["bg"], bd=2, relief="flat")
         self.top.resizable(False, False)
         self.top.attributes("-topmost", True)
         self.top.protocol("WM_DELETE_WINDOW", lambda: None)
         set_window_icon(self.top)
-        tk.Label(self.top, text=message, bg=COLORS["bg"], fg=COLORS["fg"], font=("Segoe UI", 10)).pack(pady=(15, 5))
+        
+        main_frame = tk.Frame(self.top, bg=COLORS["card"], bd=1, relief="solid", highlightbackground=COLORS["border"], highlightthickness=1)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tk.Label(main_frame, text=message, bg=COLORS["card"], fg=COLORS["fg"], font=("Segoe UI", 10, "bold")).pack(pady=(20, 10))
         style = ttk.Style(); style.theme_use('clam')
-        style.configure("Orange.Horizontal.TProgressbar", foreground=COLORS["accent"], background=COLORS["accent"])
-        self.progress = ttk.Progressbar(self.top, length=300, mode='determinate', style="Orange.Horizontal.TProgressbar")
-        self.progress.pack(pady=10)
+        style.configure("Fusion.Horizontal.TProgressbar", foreground=COLORS["primary"], background=COLORS["primary"], troughcolor=COLORS["bg"], bordercolor=COLORS["border"])
+        self.progress = ttk.Progressbar(main_frame, length=300, mode='determinate', style="Fusion.Horizontal.TProgressbar")
+        self.progress.pack(pady=(0, 20))
         self.top.update()
-    def update(self, value): self.progress['value'] = value; self.top.update()
-    def close(self): self.top.destroy()
+        
+    def update(self, value): 
+        # Thread-safe update
+        self.top.after(0, lambda: self.progress.configure(value=value))
+        
+    def close(self): 
+        self.top.after(0, self.top.destroy)
 
 # --- CORE LOGIC ---
 def get_next_index(target_dir, prefix):
@@ -186,24 +271,27 @@ def perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui, is
     fav_suffix = "_FAV" if is_fav else ""
     snapshot_name = f"{prefix}_{index}_{timestamp}{name_suffix}{fav_suffix}.zip"
     snapshot_path = os.path.join(tm_path, snapshot_name)
-
     total_files = len(all_files)
-    prog_win = ProgressWindow(f"Creating {prefix}", f"Zipping {total_files} files...") if use_gui else None
+    
+    prog_win = ProgressWindow("Pre-Restore Backup" if prefix == "Backup" else f"Creating {prefix}", "Creating Safety Backup..." if prefix == "Backup" else f"Zipping {total_files} files...") if use_gui else None
 
     try:
         with zipfile.ZipFile(snapshot_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             if total_files > 0:
                 for i, file_path in enumerate(all_files):
-                    # FIX: Removed isfile() check so empty directories are correctly written to the zip!
                     zipf.write(file_path, os.path.relpath(file_path, target_dir))
-                    if use_gui and i % max(1, total_files // 100) == 0: 
-                        prog_win.update((i / total_files) * 100)
+                    if use_gui and i % max(1, total_files // 100) == 0: prog_win.update((i / total_files) * 100)
         
         if use_gui: prog_win.update(100); prog_win.close()
         return snapshot_name, total_files
     except Exception as e:
         if use_gui: prog_win.close()
         raise e
+
+def get_icon_for_snap(s):
+    if "_FAV" in s: return "⭐"
+    elif "Backup_" in s: return "🛡️"
+    else: return "📦"
 
 def cli_list(target_dir, json_mode):
     tm_path = os.path.join(target_dir, TM_DIR)
@@ -218,7 +306,7 @@ def cli_list(target_dir, json_mode):
     data = []
     for s in snapshots:
         parts = s.split("_")
-        snap_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else "?"
+        snap_id = f"{parts[0]}_{parts[1]}" if len(parts) > 1 else "?"
         size_mb = round(os.path.getsize(os.path.join(tm_path, s)) / (1024*1024), 2)
         data.append({"id": snap_id, "filename": s, "size_mb": size_mb})
 
@@ -226,32 +314,25 @@ def cli_list(target_dir, json_mode):
         out_json("success", "list", {"snapshots": data, "total": len(data)})
     else:
         print("\n=== FusionHex TimeMachine Snapshots ===")
-        for d in data: print(f" [{d['id']}] {d['filename']} ({d['size_mb']} MB)")
+        for d in data: print(f" [{d['id']}] {get_icon_for_snap(d['filename'])}  {d['filename']} ({d['size_mb']} MB)")
         print("=======================================\n")
-        print("Tip: Restore instantly using the ID (e.g., 'tm restore 2')\n")
+        print("Tip: Restore instantly using the exact ID (e.g., 'tm restore Snapshot_1')\n")
 
 def execute_snapshot(target_dir, custom_name="", prefix="Snapshot", json_mode=False, use_gui=True, is_fav=False, force=False):
     create_timeignore(target_dir, silent=True)
     all_files = get_files_to_zip(target_dir)
 
     if not force and is_duplicate_snapshot(target_dir, all_files, prefix):
-        if json_mode:
-            out_json("error", "snapshot_creation", error="Identical snapshot already exists.")
+        if json_mode: out_json("error", "snapshot_creation", error="Identical snapshot already exists.")
         elif use_gui:
             if not messagebox.askyesno("Duplicate Found", f"A {prefix} with identical files already exists. Create anyway?"): os._exit(0)
-        else:
-            print("Identical snapshot exists. Use -f or --force to bypass.")
-            os._exit(0)
+        else: print("Identical snapshot exists. Use -f or --force to bypass."); os._exit(0)
 
     try:
         snapshot_name, total_files = perform_zip_creation(target_dir, all_files, custom_name, prefix, use_gui, is_fav)
-        if json_mode:
-            out_json("success", "snapshot_created", {"filename": snapshot_name, "files_saved": total_files})
-        elif use_gui and prefix != "Backup":
-            messagebox.showinfo("TimeMachine", f"{prefix} Created: {snapshot_name}\nFiles Saved: {total_files}")
-        elif not use_gui:
-            print(f"Success! Created {snapshot_name} ({total_files} items)")
-        
+        if json_mode: out_json("success", "snapshot_created", {"filename": snapshot_name, "files_saved": total_files})
+        elif use_gui and prefix != "Backup": messagebox.showinfo("TimeMachine VIP", f"{prefix} Created Successfully!\n\nName: {snapshot_name}\nFiles Saved: {total_files}")
+        elif not use_gui: print(f"Success! Created {snapshot_name} ({total_files} items)")
         if prefix != "Backup": os._exit(0)
     except Exception as e:
         if json_mode: out_json("error", "snapshot_creation", error=str(e))
@@ -259,56 +340,64 @@ def execute_snapshot(target_dir, custom_name="", prefix="Snapshot", json_mode=Fa
         else: print(f"Error: {e}")
         os._exit(1)
 
-def execute_restore(target_dir, target_snap, json_mode=False, use_gui=True, make_backup=True):
+def execute_restore(target_dir, target_snap, json_mode=False, use_gui=True, make_backup=True, keep_untracked=True):
     tm_path = os.path.join(target_dir, TM_DIR)
     
-    if target_snap.isdigit():
-        if not os.path.exists(tm_path):
-            if json_mode: out_json("error", "restore", error="No snapshots found.")
-            else: print("Error: No .TimeMachine folder found.")
-            os._exit(1)
-            
-        snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
-        matches = [f for f in snapshots if len(f.split("_")) > 1 and f.split("_")[1] == target_snap]
-        if matches:
-            target_snap = sorted(matches)[-1] 
-        else:
-            if json_mode: out_json("error", "restore", error=f"Snapshot ID '{target_snap}' not found.")
-            elif use_gui: messagebox.showerror("Error", f"Snapshot ID '{target_snap}' not found.")
-            else: print(f"Error: Snapshot ID '{target_snap}' not found.")
-            os._exit(1)
-
-    if not os.path.exists(os.path.join(tm_path, target_snap)):
+    if not os.path.exists(tm_path):
+        if json_mode: out_json("error", "restore", error="No snapshots found.")
+        else: print("Error: No .TimeMachine folder found.")
+        os._exit(1)
+        
+    snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
+    matches = [f for f in snapshots if f == target_snap or f.startswith(target_snap + "_")]
+    if matches: target_snap = sorted(matches)[-1] 
+    else:
         if json_mode: out_json("error", "restore", error=f"Snapshot '{target_snap}' not found.")
-        elif use_gui: messagebox.showerror("Error", "Snapshot not found.")
+        elif use_gui: messagebox.showerror("Error", f"Snapshot '{target_snap}' not found.")
         else: print(f"Error: Snapshot '{target_snap}' not found.")
         os._exit(1)
 
     if make_backup: execute_snapshot(target_dir, prefix="Backup", json_mode=False, use_gui=use_gui, is_fav=False, force=True)
-
-    prog_win = ProgressWindow("Restoring", f"Restoring {target_snap}...") if use_gui else None
+    prog_win = ProgressWindow("Restoring Data", f"Deploying {target_snap}...") if use_gui else None
+    
     try:
-        items = [i for i in os.listdir(target_dir) if i != TM_DIR]
-        for i, item in enumerate(items):
-            path = os.path.join(target_dir, item)
-            if os.path.isdir(path): shutil.rmtree(path)
-            else: os.unlink(path)
-            if use_gui and len(items) > 0: prog_win.update((i / len(items)) * 50) 
+        if keep_untracked:
+            files_to_delete = get_files_to_zip(target_dir)
+            for i, file_path in enumerate(files_to_delete):
+                if os.path.isfile(file_path):
+                    try: os.unlink(file_path)
+                    except PermissionError: os.chmod(file_path, stat.S_IWRITE); os.unlink(file_path)
+                if use_gui and len(files_to_delete) > 0: prog_win.update((i / len(files_to_delete)) * 40)
+            for root, dirs, files in os.walk(target_dir, topdown=False):
+                if TM_DIR in root.split(os.sep): continue
+                for d in dirs:
+                    try: os.rmdir(os.path.join(root, d)) 
+                    except OSError: pass 
+        else:
+            items = [i for i in os.listdir(target_dir) if i != TM_DIR]
+            for i, item in enumerate(items):
+                path = os.path.join(target_dir, item)
+                try:
+                    if os.path.isdir(path): shutil.rmtree(path, onerror=on_rm_error)
+                    else: 
+                        try: os.unlink(path)
+                        except PermissionError: os.chmod(path, stat.S_IWRITE); os.unlink(path)
+                except Exception as e: raise Exception(f"File locked. Close your editor/server and try again. ({item})")
+                if use_gui and len(items) > 0: prog_win.update((i / len(items)) * 40) 
             
         with zipfile.ZipFile(os.path.join(tm_path, target_snap), 'r') as zipf:
             members = zipf.infolist()
             for i, member in enumerate(members):
                 zipf.extract(member, target_dir)
-                if use_gui and len(members) > 0: prog_win.update(50 + ((i / len(members)) * 50)) 
+                if use_gui and len(members) > 0: prog_win.update(40 + ((i / len(members)) * 60)) 
 
         if use_gui: prog_win.close()
-        
         if json_mode: out_json("success", "restored", {"restored_from": target_snap})
-        elif use_gui: messagebox.showinfo("Success", f"Folder Restored perfectly from {target_snap}!")
+        elif use_gui: messagebox.showinfo("Success", f"Project successfully restored!\n\nLoaded: {target_snap}\n\n(A safety backup was automatically created).")
         else: print(f"Successfully restored from {target_snap}")
         os._exit(0) 
     except Exception as e:
-        if use_gui: prog_win.close(); messagebox.showerror("Error", f"Restore Error: {e}")
+        if use_gui: prog_win.close(); messagebox.showerror("Restore Error", f"Failed to restore: {e}")
         elif json_mode: out_json("error", "restore", error=str(e))
         else: print(f"Error: {e}")
         os._exit(1)
@@ -318,20 +407,24 @@ class InstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(f"{CONFIG['company_name']} - {CONFIG['app_title']}")
-        center_window(self.root, 500, 380)
+        center_window(self.root, 480, 420)
         self.root.configure(bg=COLORS["bg"])
         self.exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
         set_window_icon(self.root)
 
-        tk.Label(root, text=CONFIG['app_title'], font=("Segoe UI", 20, "bold"), bg=COLORS["bg"], fg=COLORS["primary"]).pack(pady=(20, 0))
-        tk.Label(root, text=f"v{CONFIG['version']} by {CONFIG['company_name']}", font=("Segoe UI", 10), bg=COLORS["bg"], fg=COLORS["accent"]).pack()
-        tk.Label(root, text=CONFIG['about_text'], font=("Segoe UI", 9), bg=COLORS["bg"], fg="#aaaaaa", wraplength=400, justify="center").pack(pady=15)
+        header = tk.Frame(root, bg=COLORS["bg"], pady=20)
+        header.pack(fill="x", padx=15, pady=(15, 0))
+        tk.Label(header, text=CONFIG['app_title'], font=("Segoe UI", 24, "bold"), bg=COLORS["bg"], fg=COLORS["primary"]).pack()
+        tk.Label(header, text=f"v{CONFIG['version']} by {CONFIG['company_name']}", font=("Segoe UI", 10), bg=COLORS["bg"], fg=COLORS["secondary"]).pack(pady=(2,0))
+
+        tk.Label(root, text=CONFIG['about_text'], font=("Segoe UI", 10), bg=COLORS["bg"], fg="#bbbbbb", wraplength=400, justify="center").pack(pady=10)
 
         btn_frame = tk.Frame(root, bg=COLORS["bg"])
-        btn_frame.pack(pady=10)
+        btn_frame.pack(pady=15)
         
-        tk.Button(btn_frame, text="Install Context Menu & CLI", font=("Segoe UI", 10, "bold"), bg=COLORS["primary"], fg="white", relief="flat", width=35, pady=8, command=lambda: threading.Thread(target=self.install_reg, daemon=True).start()).pack(pady=5)
-        tk.Button(btn_frame, text="Remove Menu", font=("Segoe UI", 10, "bold"), bg=COLORS["danger"], fg="white", relief="flat", width=35, pady=8, command=lambda: threading.Thread(target=self.uninstall_reg, daemon=True).start()).pack(pady=5)
+        # We call the functions directly, no threading needed because it takes 0.1 seconds
+        ActionButton(btn_frame, 320, 45, "Install System Integration", COLORS["primary"], COLORS["primary_hover"], COLORS["bg"], command=self.install_reg).pack(pady=8)
+        ActionButton(btn_frame, 320, 45, "Remove Menu Elements", COLORS["danger"], COLORS["danger_hover"], "white", command=self.uninstall_reg).pack(pady=8)
 
     def add_to_path(self, appdata_dir):
         import winreg
@@ -339,24 +432,18 @@ class InstallerGUI:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_ALL_ACCESS)
             try: path, _ = winreg.QueryValueEx(key, "PATH")
             except FileNotFoundError: path = ""
-            
             if appdata_dir.lower() not in path.lower():
                 new_path = f"{path};{appdata_dir}" if path else appdata_dir
                 winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_path)
-                HWND_BROADCAST = 0xFFFF; WM_SETTINGCHANGE = 0x001A; SMTO_ABORTIFHUNG = 0x0002
-                ctypes.windll.user32.SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_ulong()))
+                ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(ctypes.c_ulong()))
             winreg.CloseKey(key)
         except Exception as e: print(f"Path Error: {e}")
 
     def get_permanent_exe(self):
         appdata_dir = os.path.join(os.getenv('LOCALAPPDATA'), 'FusionHex_TimeMachine')
         if not os.path.exists(appdata_dir): os.makedirs(appdata_dir)
-            
-        perm_exe = os.path.join(appdata_dir, "tm.exe")
-        perm_config = os.path.join(appdata_dir, "config_vip.json")
-        
+        perm_exe, perm_config = os.path.join(appdata_dir, "tm.exe"), os.path.join(appdata_dir, "config_vip.json")
         self.add_to_path(appdata_dir) 
-        
         if self.exe_path.lower() != perm_exe.lower():
             try: 
                 shutil.copy2(self.exe_path, perm_exe)
@@ -366,7 +453,9 @@ class InstallerGUI:
         return perm_exe if os.path.exists(perm_exe) else self.exe_path
 
     def install_reg(self):
-        prog = ProgressWindow("Installing", "Writing to Windows Registry...")
+        prog = ProgressWindow("System Integration", "Writing to Windows Registry...")
+        self.root.update()
+        
         safe_exe = self.get_permanent_exe().replace("\\", "\\\\")
         icon_main = get_permanent_icon("app_icon.ico").replace("\\", "\\\\")
         icon_create = get_permanent_icon("create.ico").replace("\\", "\\\\")
@@ -422,68 +511,65 @@ class InstallerGUI:
 [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine\\shell\\03restore\\command]
 @="\\"{safe_exe}\\" _ctx_restore \\"%1\\""
 """
-        reg_file = os.path.abspath("install_tm.reg")
+        # Save to temp directory to avoid FileNotFoundError
+        reg_file = os.path.join(tempfile.gettempdir(), "install_tm.reg")
         with open(reg_file, "w") as f: f.write(reg_content)
-        import time; time.sleep(1); prog.update(50)
-        subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # creationflags=CREATE_NO_WINDOW prevents the terminal flash
+        subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
         if os.path.exists(reg_file): os.remove(reg_file)
-        prog.update(100); time.sleep(0.5); prog.close()
-        messagebox.showinfo("Success", "Context Menu & CLI Installed!\n\nYou can now type 'tm commands' in any terminal.")
+        
+        prog.close()
+        messagebox.showinfo("Installation Complete", "TimeMachine VIP is Ready!\n\nRight-click in any folder to create instant snapshots or use 'tm commands' in any terminal.")
+        os._exit(0) # Auto close
 
     def uninstall_reg(self):
         prog = ProgressWindow("Removing", "Scrubbing Registry Keys...")
-        reg_file = os.path.abspath("uninstall_tm.reg")
+        self.root.update()
+        
+        reg_file = os.path.join(tempfile.gettempdir(), "uninstall_tm.reg")
         with open(reg_file, "w") as f: f.write("Windows Registry Editor Version 5.00\n[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\Background\\shell\\TimeMachine]\n[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\TimeMachine]\n")
-        import time; time.sleep(1); prog.update(50)
-        subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        subprocess.run(['reg.exe', 'import', reg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
         if os.path.exists(reg_file): os.remove(reg_file)
-        prog.update(100); time.sleep(0.5); prog.close()
-        messagebox.showinfo("Success", "Registry scrubbed cleanly!")
+        
+        prog.close()
+        messagebox.showinfo("Success", "Registry scrubbed cleanly! Removed from context menu.")
+        os._exit(0) # Auto close
 
 # --- ENTRY POINT & CLI PARSER ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="tm", description="FusionHex TimeMachine CLI")
     subparsers = parser.add_subparsers(dest="command")
 
-    # Internal Context Menu Commands
     p_ctx_create = subparsers.add_parser("_ctx_create")
-    p_ctx_create.add_argument("path")
-    p_ctx_create.add_argument("--fav", action="store_true")
-    
+    p_ctx_create.add_argument("path"); p_ctx_create.add_argument("--fav", action="store_true")
     p_ctx_restore = subparsers.add_parser("_ctx_restore")
     p_ctx_restore.add_argument("path")
 
-    # Public CLI Commands
     p_snap = subparsers.add_parser("snapshot", help="Create a snapshot")
-    p_snap.add_argument("name", nargs="?", default="", help="Optional name suffix")
-    p_snap.add_argument("--fav", action="store_true", help="Mark as favorite")
-    p_snap.add_argument("-f", "--force", action="store_true", help="Force create even if identical")
-    p_snap.add_argument("--json", action="store_true", help="Output pure JSON")
+    p_snap.add_argument("name", nargs="?", default="")
+    p_snap.add_argument("--fav", action="store_true"); p_snap.add_argument("-f", "--force", action="store_true"); p_snap.add_argument("--json", action="store_true")
 
     p_list = subparsers.add_parser("list", help="List snapshots")
-    p_list.add_argument("--json", action="store_true", help="Output pure JSON")
+    p_list.add_argument("--json", action="store_true")
 
     p_ignore = subparsers.add_parser("ignore", help="Add pattern to .timeignore")
-    p_ignore.add_argument("pattern", help="Folder or file pattern (e.g. node_modules/)")
-    p_ignore.add_argument("--json", action="store_true", help="Output pure JSON")
+    p_ignore.add_argument("pattern")
+    p_ignore.add_argument("--overwrite", action="store_true"); p_ignore.add_argument("--json", action="store_true")
 
     p_restore = subparsers.add_parser("restore", help="Restore a snapshot")
-    p_restore.add_argument("id_or_name", help="Exact filename or ID of the snapshot to restore")
-    p_restore.add_argument("--json", action="store_true", help="Output pure JSON")
+    p_restore.add_argument("id_or_name")
+    p_restore.add_argument("--wipe", action="store_true"); p_restore.add_argument("--json", action="store_true")
     
-    # New Commands Menu
-    p_cmds = subparsers.add_parser("commands", help="Show all available CLI commands")
-    p_help = subparsers.add_parser("help", help="Show all available CLI commands")
-
+    subparsers.add_parser("commands"); subparsers.add_parser("help")
     args = parser.parse_args()
 
-    # GUI Mode (No arguments)
     if not args.command:
+        hide_console() # Instantly hide terminal on double click
         root = tk.Tk(); center_window(root, 0, 0); set_window_icon(root)
-        InstallerGUI(root)
-        root.mainloop()
+        InstallerGUI(root); root.mainloop()
 
-    # Context Menu Mode (Hide Console, Show GUI)
     elif args.command in ["_ctx_create", "_ctx_restore"]:
         hide_console() 
         root = tk.Tk(); root.withdraw(); set_window_icon(root)
@@ -492,44 +578,93 @@ if __name__ == "__main__":
         if args.command == "_ctx_create":
             threading.Thread(target=execute_snapshot, args=(target, "", "Snapshot", False, True, args.fav, False), daemon=True).start()
             root.mainloop()
+            
         elif args.command == "_ctx_restore":
             tm_path = os.path.join(target, TM_DIR)
             if not os.path.exists(tm_path): messagebox.showerror("Error", "No snapshots here."); os._exit(0)
             
-            snapshots = sorted([f for f in os.listdir(tm_path) if f.endswith(".zip")], reverse=True)
-            top = tk.Toplevel(); top.title("Restore"); center_window(top, 380, 420); top.configure(bg=COLORS["bg"]); set_window_icon(top)
+            snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
+            snapshots.sort(key=lambda x: int(x.split("_")[1]) if "_" in x else 0, reverse=True)
+            
+            top = tk.Toplevel(); top.title(f"{CONFIG['company_name']} - Restore Center")
+            center_window(top, 500, 600); top.configure(bg=COLORS["bg"]); set_window_icon(top)
             top.protocol("WM_DELETE_WINDOW", lambda: os._exit(0))
-            tk.Label(top, text="Select Snapshot", bg=COLORS["bg"], fg=COLORS["accent"], font=("Segoe UI", 12, "bold")).pack(pady=10)
-            lb = tk.Listbox(top, bg="#2d2d2d", fg=COLORS["fg"]); lb.pack(fill="both", expand=True, padx=20)
-            for s in snapshots: lb.insert(tk.END, s)
-            def on_sel():
-                ch = lb.get(tk.ACTIVE)
-                if ch and messagebox.askyesno("Confirm", f"Restore {ch}?"):
-                    top.destroy()
-                    threading.Thread(target=execute_restore, args=(target, ch, False, True, True), daemon=True).start()
-                else: os._exit(0)
-            tk.Button(top, text="RESTORE", bg=COLORS["danger"], fg=COLORS["fg"], command=on_sel).pack(pady=15, fill="x", padx=20)
+            
+            tk.Label(top, text="Select Snapshot to Restore", font=("Segoe UI", 16, "bold"), bg=COLORS["bg"], fg=COLORS["primary"]).pack(pady=(20, 10))
+            
+            # Custom Scrollable Cards Area (Flat Scrollbar)
+            list_frame = tk.Frame(top, bg=COLORS["bg"])
+            list_frame.pack(fill="both", expand=True, padx=20, pady=5)
+            
+            canvas = tk.Canvas(list_frame, bg=COLORS["bg"], highlightthickness=0)
+            style = ttk.Style(); style.theme_use('clam')
+            style.configure("Dark.Vertical.TScrollbar", background=COLORS["border"], troughcolor=COLORS["bg"], bordercolor=COLORS["bg"], arrowcolor=COLORS["primary"], relief="flat", borderwidth=0)
+            style.map("Dark.Vertical.TScrollbar", background=[('active', COLORS["primary"])])
+            
+            scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview, style="Dark.Vertical.TScrollbar")
+            scrollable_frame = tk.Frame(canvas, bg=COLORS["bg"])
+
+            scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=435)
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            # Enable smooth MouseWheel scrolling
+            top.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+            
+            canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
+            
+            # Populate Cards
+            selected_snapshot = [None]
+            cards = []
+            
+            def handle_card_select(val):
+                selected_snapshot[0] = val
+                for c in cards: c.set_selected(c.value == val)
+
+            for s in snapshots:
+                icon = get_icon_for_snap(s)
+                card = SnapshotCard(scrollable_frame, 435, 45, f"{icon}   {s}", s, handle_card_select)
+                card.pack(pady=4)
+                cards.append(card)
+            
+            # Options Frame & Toggle
+            options_frame = tk.Frame(top, bg=COLORS["bg"])
+            options_frame.pack(fill="x", padx=25, pady=(15, 20))
+            
+            toggle_state = [True]
+            def on_toggle(state): toggle_state[0] = state
+            
+            AndroidToggle(options_frame, command=on_toggle, initial_state=True).pack(side="left", padx=(0, 10))
+            tk.Label(options_frame, text="Safe Restore (Keep untracked items like venv)", bg=COLORS["bg"], fg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left")
+
+            def do_restore():
+                ch = selected_snapshot[0]
+                if ch:
+                    if messagebox.askyesno("Confirm", f"Restore:\n\n{ch}\n\n(A backup will be created first)."):
+                        top.destroy()
+                        threading.Thread(target=execute_restore, args=(target, ch, False, True, True, toggle_state[0]), daemon=True).start()
+                else: messagebox.showwarning("Warning", "Please click on a snapshot first.")
+
+            ActionButton(top, 450, 45, "RESTORE SELECTED", COLORS["danger"], COLORS["danger_hover"], "white", command=do_restore).pack(pady=(0, 25))
             root.mainloop()
 
-    # CLI / AI Mode (Stay in terminal)
+    # CLI / AI Mode
     else:
         cwd = os.getcwd()
         if args.command in ["commands", "help"]:
-            print("\n=== FusionHex TimeMachine CLI Commands ===")
-            print(" tm snapshot [name]  : Create snapshot (Options: -f to force, --fav for favorite, --json)")
-            print(" tm restore <ID>     : Restore a snapshot by its ID or filename")
-            print(" tm list             : List all snapshots and their IDs")
-            print(" tm ignore <pattern> : Add a file/folder to .timeignore (e.g. tm ignore node_modules/)")
-            print(" tm commands         : Show this help menu")
-            print("==========================================\n")
+            print("\n=== FusionHex TimeMachine CLI ===")
+            print(" tm snapshot [name]  : Create snapshot (-f to force, --fav)")
+            print(" tm restore <ID>     : Restore a snapshot (--wipe to delete untracked)")
+            print(" tm list             : List all snapshots and IDs")
+            print(" tm ignore <pattern> : Add pattern to .timeignore (--overwrite)")
             os._exit(0)
-        elif args.command == "snapshot":
-            execute_snapshot(cwd, custom_name=args.name, json_mode=args.json, use_gui=False, is_fav=args.fav, force=args.force)
-        elif args.command == "list":
-            cli_list(cwd, json_mode=args.json)
+        elif args.command == "snapshot": execute_snapshot(cwd, custom_name=args.name, json_mode=args.json, use_gui=False, is_fav=args.fav, force=args.force)
+        elif args.command == "list": cli_list(cwd, json_mode=args.json)
         elif args.command == "ignore":
-            with open(os.path.join(cwd, ".timeignore"), "a") as f: f.write(f"\n{args.pattern}")
-            if args.json: out_json("success", "ignore_added", {"pattern": args.pattern})
-            else: print(f"Added {args.pattern} to .timeignore")
-        elif args.command == "restore":
-            execute_restore(cwd, args.id_or_name, json_mode=args.json, use_gui=False, make_backup=True)
+            mode = "w" if args.overwrite else "a"
+            with open(os.path.join(cwd, ".timeignore"), mode) as f: 
+                if args.overwrite: f.write("# FusionHex TimeMachine Ignore File\n")
+                f.write(f"{args.pattern}\n")
+            if args.json: out_json("success", "ignore_added", {"pattern": args.pattern, "overwritten": args.overwrite})
+            else: print(f"Successfully {'overwrote with' if args.overwrite else 'added'} {args.pattern} to .timeignore")
+        elif args.command == "restore": execute_restore(cwd, args.id_or_name, json_mode=args.json, use_gui=False, make_backup=True, keep_untracked=not args.wipe)
