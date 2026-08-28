@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['vip_timemachine.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets'), ('build_flavor.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\app_icon.ico'],
+    icon=['assets\\vip_app_icon.ico'],
 )

@@ -2,13 +2,19 @@
     "company_name": "FusionHex",
     "website_url": "https://www.fusionhex.com/",
     "app_title": "TimeMachine",
+    "vipapp_title": "TimeMachine VIP",
     "version": "1.0.9",
+    "version_vip": "1.1.0",
     "about_text": "Instant local snapshots and backups directly from your Windows context menu. Keep your projects safe before making risky changes.",
     "colors": {
-        "bg": "#1a1a1a",
-        "fg": "#ffffff",
-        "primary": "#0078D7",
-        "accent": "#ff9800",
-        "danger": "#d32f2f"
+        "bg": "#120e0c",
+        "fg": "#f5f5f5",
+        "primary": "#ff9800",
+        "secondary": "#0288D1",
+        "danger": "#d32f2f",
+        "card": "#1e1814",
+        "border": "#3a2e26",
+        "primary_hover": "#ffb74d",
+        "danger_hover": "#f44336"
     }
 }

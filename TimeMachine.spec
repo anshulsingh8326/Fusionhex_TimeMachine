@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['timemachine.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets'), ('build_flavor.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
