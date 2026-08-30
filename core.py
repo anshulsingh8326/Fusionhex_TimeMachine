@@ -70,8 +70,9 @@ def create_timeignore(target_dir):
     ignore_path = os.path.join(target_dir, ".timeignore")
     if not os.path.exists(ignore_path):
         with open(ignore_path, "w") as f: 
-            f.write("# FusionHex TimeMachine Ignore File\n# node_modules/\n# build/\n# dist/\n# venv/\n# .git/\n# __pycache__/\n# *.mp4\n")
-
+            # Removed the '#' from the folders so they are active by default
+            f.write("# FusionHex TimeMachine Ignore File\nnode_modules/\nbuild/\ndist/\nvenv/\n.git/\n__pycache__/\n*.mp4\n")
+            
 def get_files_to_zip(target_dir):
     patterns = get_ignore_patterns(target_dir)
     all_files = []

@@ -55,8 +55,18 @@ def execute_restore(target_dir, target_snap, use_gui=True, make_backup=True, kee
         os._exit(1)
         
     snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
-    matches = [f for f in snapshots if f == target_snap or f.startswith(target_snap + "_")]
-    if matches: target_snap = sorted(matches)[-1] 
+    
+    # Matches "22", "Snapshot_22", or the full filename
+    matches = [
+        f for f in snapshots 
+        if f == target_snap 
+        or f.startswith(f"Snapshot_{target_snap}_")
+        or f.startswith(f"Backup_{target_snap}_")
+        or f.startswith(f"{target_snap}_")
+    ]
+    
+    if matches: 
+        target_snap = sorted(matches)[-1] 
     else:
         if use_gui: messagebox.showerror("Error", f"Snapshot '{target_snap}' not found.")
         else: print(f"Error: Snapshot '{target_snap}' not found.")
@@ -108,11 +118,11 @@ def execute_restore(target_dir, target_snap, use_gui=True, make_backup=True, kee
 
 def print_cli_help():
     print("\n=== FusionHex TimeMachine CLI ===")
-    print(" tm snapshot [name]  : Create snapshot (-f to force, --fav)")
-    print(" tm restore <ID>     : Restore a snapshot (--wipe to delete untracked)")
-    print(" tm list             : List all snapshots in current dir")
-    print(" tm projects         : List all global tracked folders")
-    print(" tm ignore <pattern> : Add pattern to .timeignore (--overwrite)")
+    print(" \n tm snapshot [name]  : Create snapshot (-f to force, --fav)")
+    print(" \n tm restore <ID>     : Restore a snapshot (--wipe to delete untracked) e.g :  tm restore Snapshot_23_20260831_014021_fav.zip (By Default it makes a backup and keep untracked files)")
+    print(" \n tm list             : List all snapshots in current dir")
+    print(" \n tm projects         : List all global tracked folders")
+    print(" \n tm ignore <pattern> : Add pattern to .timeignore (--overwrite) e.g : credentials/password.txt" )
 
 class FusionParser(argparse.ArgumentParser):
     def error(self, message):
@@ -242,18 +252,45 @@ def main_execution():
                 for f in folders: print(f" -> {f}")
         elif args.command == "list":
             tm_path = os.path.join(cwd, TM_DIR)
-            if not os.path.exists(tm_path): print("No snapshots found here."); os._exit(0)
+            if not os.path.exists(tm_path):
+                print("No snapshots found here.")
+                os._exit(0)
+
             snapshots = [f for f in os.listdir(tm_path) if f.endswith(".zip")]
-            snapshots.sort(key=lambda x: int(x.split("_")[1]) if "_" in x else 0, reverse=True)
+            snapshots.sort(key=lambda x: int(x.split("_")[1]) if "_" in x and x.split("_")[1].isdigit() else 0, reverse=True)
+
+            if not snapshots:
+                print("No snapshots found here.")
+                os._exit(0)
+
+            print("\n=== Snapshots in Current Directory ===")
             for s in snapshots:
-                size_mb = round(os.path.getsize(os.path.join(tm_path, s)) / (1024*1024), 2)
-                icon = "⭐" if "_FAV" in s else ("🛡️" if "Backup_" in s else "📦")
-                print(f" {icon}  {s} ({size_mb} MB)")
+                size_mb = round(os.path.getsize(os.path.join(tm_path, s)) / (1024 * 1024), 2)
+                parts = s.replace(".zip", "").split("_")
+                
+                # Extracts just the number (e.g. "22" from "Snapshot_22_...")
+                snap_num = parts[1] if len(parts) > 1 and parts[1].isdigit() else parts[0]
+                
+                print(f"  [{snap_num}]  {s} ({size_mb} MB)")
+            print("======================================\n")
         elif args.command == "ignore":
-            mode = "w" if args.overwrite else "a"
-            with open(os.path.join(cwd, ".timeignore"), mode) as f: 
-                if args.overwrite: f.write("# FusionHex TimeMachine Ignore File\n")
-                f.write(f"{args.pattern}\n")
+            ignore_path = os.path.join(cwd, ".timeignore")
+            
+            # If overwriting or file doesn't exist, create fresh
+            if args.overwrite or not os.path.exists(ignore_path):
+                with open(ignore_path, "w") as f: 
+                    f.write(f"# FusionHex TimeMachine Ignore File\n{args.pattern}\n")
+            else:
+                # Read the file first to check the last character
+                with open(ignore_path, "r") as f:
+                    content = f.read()
+                
+                # Append safely
+                with open(ignore_path, "a") as f:
+                    if content and not content.endswith("\n"):
+                        f.write("\n") # Force a new line if it's missing!
+                    f.write(f"{args.pattern}\n")
+                    
             print(f"Successfully added {args.pattern} to .timeignore")
         elif args.command == "restore": execute_restore(cwd, args.id_or_name, use_gui=False, make_backup=True, keep_untracked=not args.wipe)
 
