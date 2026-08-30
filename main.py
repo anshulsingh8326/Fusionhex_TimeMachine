@@ -119,7 +119,7 @@ def execute_restore(target_dir, target_snap, use_gui=True, make_backup=True, kee
 def print_cli_help():
     print("\n=== FusionHex TimeMachine CLI ===")
     print(" \n tm snapshot [name]  : Create snapshot (-f to force, --fav)")
-    print(" \n tm restore <ID>     : Restore a snapshot (--wipe to delete untracked) e.g :  tm restore Snapshot_23_20260831_014021_fav.zip (By Default it makes a backup and keep untracked files)")
+    print(" \n tm restore <ID>     : Restore a snapshot (--wipe to delete untracked) (By Default it makes a backup and keep untracked files)")
     print(" \n tm list             : List all snapshots in current dir")
     print(" \n tm projects         : List all global tracked folders")
     print(" \n tm ignore <pattern> : Add pattern to .timeignore (--overwrite) e.g : credentials/password.txt" )
