@@ -14,4 +14,3 @@ build/
 __pycache__/
 *.spec
 .git
-ezz
